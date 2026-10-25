@@ -17,6 +17,7 @@ mod keymap;
 pub(crate) mod session;
 mod window;
 
+use crate::{ServerConfig, ServerDetails};
 use anyhow::{anyhow, Result};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,17 +28,45 @@ use winit::event_loop::EventLoop;
 use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
 use window::{App, UserEvent};
 
+/// Called with the server's details once the handshake succeeds.
+pub type ServerInfoCallback = Arc<dyn Fn(&ServerDetails) + Send + Sync>;
+
 /// Client settings.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientConfig {
-    /// Window title. The license notice and source links, which the GNU AGPL requires the
-    /// window to show, are appended to it.
+    /// Window title.
     pub title: String,
+    /// Session settings to ask the server for: which display to share, video quality, and
+    /// so on. Anything left unset gets the server's default.
+    pub server: ServerConfig,
+    /// Receives the server's software version, license notice and source code offer when the
+    /// session starts. It runs on the thread that called [`Client::run`].
+    ///
+    /// The GNU AGPL requires software built on desklib to let its users see the license
+    /// notices and get the source code: both desklib's own ([`LEGAL_NOTICE`](crate::LEGAL_NOTICE),
+    /// [`SOURCE_URL`](crate::SOURCE_URL)) and, since the user interacts with the server over
+    /// the network, the server's (section 13). Show them somewhere convenient, such as an
+    /// About box. They are also logged.
+    pub on_server_info: Option<ServerInfoCallback>,
 }
 
 impl Default for ClientConfig {
     fn default() -> Self {
-        Self { title: "Remote Desktop".into() }
+        Self {
+            title: "Remote Desktop".into(),
+            server: ServerConfig::default(),
+            on_server_info: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("title", &self.title)
+            .field("server", &self.server)
+            .field("on_server_info", &self.on_server_info.as_ref().map(|_| "<callback>"))
+            .finish()
     }
 }
 
@@ -84,6 +113,10 @@ impl Client {
     /// Opens a window showing the remote desktop and runs until the window is closed (`Ok`)
     /// or the session fails.
     ///
+    /// The session starts with a handshake that sends [`ClientConfig::server`] to the server.
+    /// If either side's version is too old for the other, this returns a
+    /// [`VersionMismatch`](crate::VersionMismatch) error.
+    ///
     /// This blocks the calling thread running the window's event loop. On macOS it must be
     /// called from the main thread; elsewhere any thread works, but sessions must keep to
     /// the thread that ran the first one. Network I/O runs on the current Tokio runtime if
@@ -110,7 +143,14 @@ impl Client {
             };
             let mailbox = Arc::new(Mutex::new(None));
             let (input_tx, input_rx) = mpsc::unbounded_channel();
-            let session = session::run(reader, writer, input_rx, mailbox.clone(), events);
+            let session = session::run(
+                reader,
+                writer,
+                self.config.server.clone(),
+                input_rx,
+                mailbox.clone(),
+                events,
+            );
             match tokio::runtime::Handle::try_current() {
                 Ok(handle) => {
                     handle.spawn(session);

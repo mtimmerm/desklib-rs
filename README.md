@@ -33,10 +33,22 @@ cargo run --release --example client -- <server-ip>:21118
 
 ## Protocol
 
-Length-delimited protobuf messages (`protos/message.proto`):
+Length-delimited protobuf messages (`protos/message.proto`). A session opens with a handshake:
 
-- server → client: source offer and license notice (first), AV1 video frames, cursor shapes,
-  position and visibility
+1. The server sends `ServerInfo`: its protocol version, the oldest client version it supports,
+   its software version, and the AGPL source offer and license notice.
+2. The client replies with `ClientHello`: its protocol version, the oldest server version it
+   supports, its software version, and the session settings (`ServerConfig`: display, frame
+   rate, encoder speed and quality, threads).
+
+Each side checks the versions independently and closes the connection if the other side is
+too old, returning a `VersionMismatch` error. The settings are all optional, so the server
+uses its own defaults for anything the client leaves out, including settings added in newer
+versions. The `.proto` file lists the rules for changing the protocol compatibly.
+
+After the handshake:
+
+- server → client: AV1 video frames, cursor shapes, position and visibility
 - client → server: mouse moves, buttons, wheel, keys (as USB HID usages), key-frame requests
 
 ## Performance
@@ -96,7 +108,8 @@ rav1e (BSD-2-Clause).
 
 If you distribute desklib or software built on it, the AGPL requires you to do so under the
 AGPL and to provide the complete source code. If you modify it and let people use it over a
-network, you must also offer them the source. The server does that for you by sending
-`ServerConfig::source_url` to every client, and the client shows it in its window title along
-with the license notice. Point `source_url` at your modified source. See NOTICE.md for
-details.
+network, you must also offer them the source. The server sends its source offer
+(`ServerOptions::source_url`; point it at your modified source) to every client. Applications
+must let their users see the license notices and source offers, for example in an About box:
+desklib's own (`desklib::LEGAL_NOTICE` and `desklib::SOURCE_URL`) and the server's, which the
+client passes to `ClientConfig::on_server_info`. See NOTICE.md for details.

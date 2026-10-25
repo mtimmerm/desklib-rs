@@ -14,7 +14,8 @@
 //! Capture and encode loop, on its own thread since capturers are not `Send` on every
 //! platform and encoding is CPU-bound.
 
-use super::{DisplayRect, ServerConfig, Shared};
+use super::{DisplayRect, Shared};
+use crate::handshake::Settings;
 use crate::codec::{EncodedFrame, Encoder};
 use crate::proto::{Message, VideoFrame};
 use anyhow::{anyhow, bail, Context, Result};
@@ -28,11 +29,11 @@ use tokio::sync::mpsc;
 /// session ending.
 const CAPTURE_TIMEOUT: Duration = Duration::from_millis(100);
 
-pub fn spawn(config: ServerConfig, shared: Arc<Shared>, tx: mpsc::Sender<Message>) -> Result<()> {
+pub fn spawn(settings: Settings, shared: Arc<Shared>, tx: mpsc::Sender<Message>) -> Result<()> {
     std::thread::Builder::new()
         .name("desk-video".into())
         .spawn(move || {
-            if let Err(e) = run(&config, &shared, &tx) {
+            if let Err(e) = run(&settings, &shared, &tx) {
                 log::error!("video: {e:#}");
                 shared.fail(e);
             }
@@ -63,9 +64,9 @@ struct LastFrame {
     stride: usize,
 }
 
-fn run(config: &ServerConfig, shared: &Shared, tx: &mpsc::Sender<Message>) -> Result<()> {
+fn run(config: &Settings, shared: &Shared, tx: &mpsc::Sender<Message>) -> Result<()> {
     let interval = Duration::from_secs(1) / config.max_fps.max(1);
-    let settings = config.encoder_settings();
+    let settings = &config.encoder;
     let mut encoder: Option<Encoder> = None;
     let mut last = LastFrame { pixels: Vec::new(), stride: 0 };
     let mut failures = 0;

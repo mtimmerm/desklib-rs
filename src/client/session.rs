@@ -16,8 +16,9 @@
 
 use crate::codec::{DecodedFrame, Decoder};
 use crate::proto::{Message, RefreshVideo, Union};
+use crate::handshake::{self, ServerConfig, ServerDetails};
 use crate::transport::{MessageReader, MessageWriter};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -34,8 +35,8 @@ pub struct CursorImage {
 }
 
 pub enum Event {
-    /// The server's source offer and license notice.
-    ServerInfo { source_url: String, notice: String },
+    /// The server's version, source offer and license notice.
+    ServerInfo(ServerDetails),
     /// A new frame is waiting in the mailbox.
     Frame,
     CursorShape(CursorImage),
@@ -52,6 +53,7 @@ pub type Mailbox = Arc<Mutex<Option<DecodedFrame>>>;
 pub async fn run<R, W>(
     reader: R,
     writer: W,
+    config: ServerConfig,
     mut input: mpsc::UnboundedReceiver<Message>,
     mailbox: Mailbox,
     events: impl Fn(Event) + Clone + Send + 'static,
@@ -59,13 +61,14 @@ pub async fn run<R, W>(
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let result = serve(reader, writer, &mut input, mailbox, events.clone()).await;
+    let result = serve(reader, writer, &config, &mut input, mailbox, events.clone()).await;
     events(Event::Closed(result));
 }
 
 async fn serve<R, W>(
     reader: R,
     writer: W,
+    config: &ServerConfig,
     input: &mut mpsc::UnboundedReceiver<Message>,
     mailbox: Mailbox,
     events: impl Fn(Event) + Clone + Send + 'static,
@@ -76,6 +79,8 @@ where
 {
     let mut reader = MessageReader::new(reader);
     let mut writer = MessageWriter::new(writer);
+    let server = handshake::client(&mut reader, &mut writer, config).await?;
+    events(Event::ServerInfo(server));
     let (refresh_tx, mut refresh_rx) = mpsc::unbounded_channel();
     let video = spawn_decoder(mailbox, events.clone(), refresh_tx)?;
 
@@ -97,10 +102,7 @@ where
                         height: c.height,
                         rgba: c.colors.to_vec(),
                     }),
-                    Some(Union::ServerInfo(i)) => Event::ServerInfo {
-                        source_url: i.source_url,
-                        notice: i.notice,
-                    },
+                    Some(Union::SessionError(e)) => bail!("server: {}", e.message),
                     Some(Union::CursorId(id)) => Event::CursorId(id),
                     Some(Union::CursorHidden(_)) => Event::CursorHidden,
                     Some(Union::CursorPosition(p)) => Event::CursorPosition(p.x, p.y),

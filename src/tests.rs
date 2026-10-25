@@ -15,7 +15,7 @@
 
 use crate::client::session::{self, Event};
 use crate::proto::{Message, MouseMove};
-use crate::{Server, ServerConfig};
+use crate::{Server, ServerConfig, ServerOptions};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -28,14 +28,14 @@ use tokio::sync::mpsc;
 async fn server_to_client_session() {
     let (server_end, client_end) = tokio::io::duplex(1 << 20);
     let server = tokio::spawn(async move {
-        Server::new(ServerConfig::default()).run_stream(server_end).await
+        Server::new(ServerOptions::default()).run_stream(server_end).await
     });
 
     let (reader, writer) = tokio::io::split(client_end);
     let mailbox: session::Mailbox = Arc::new(Mutex::new(None));
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let (input_tx, input_rx) = mpsc::unbounded_channel();
-    tokio::spawn(session::run(reader, writer, input_rx, mailbox.clone(), move |e| {
+    tokio::spawn(session::run(reader, writer, ServerConfig::default(), input_rx, mailbox.clone(), move |e| {
         let _ = event_tx.send(e);
     }));
 
@@ -44,7 +44,11 @@ async fn server_to_client_session() {
     while frames < 1 || !cursor_shape || cursor_pos.is_none() || !info {
         let event = tokio::time::timeout_at(deadline, event_rx.recv())
             .await
-            .expect("timed out waiting for the session")
+            .unwrap_or_else(|_| {
+                panic!(
+                    "timed out: info {info}, frames {frames}, cursor shape or hidden {cursor_shape}, cursor position {cursor_pos:?}"
+                )
+            })
             .expect("session ended");
         match event {
             Event::Frame => {
@@ -57,12 +61,15 @@ async fn server_to_client_session() {
                 assert_eq!(c.rgba.len(), (c.width * c.height * 4) as usize);
                 cursor_shape = true;
             }
+            // The pointer may be hidden on the server (e.g. while someone types there).
+            Event::CursorHidden => cursor_shape = true,
             Event::CursorPosition(x, y) => cursor_pos = Some((x, y)),
             // The AGPL source offer comes first.
-            Event::ServerInfo { source_url, notice } => {
+            Event::ServerInfo(details) => {
                 assert_eq!(frames, 0, "server info must precede video");
-                assert_eq!(source_url, crate::SOURCE_URL);
-                assert_eq!(notice, crate::LEGAL_NOTICE);
+                assert_eq!(details.source_url, crate::SOURCE_URL);
+                assert_eq!(details.notice, crate::LEGAL_NOTICE);
+                assert_eq!(details.software_version, format!("desklib {}", env!("CARGO_PKG_VERSION")));
                 info = true;
             }
             Event::Closed(r) => panic!("session closed: {r:?}"),
@@ -81,4 +88,38 @@ async fn server_to_client_session() {
     drop(input_tx);
     let result = tokio::time::timeout(Duration::from_secs(10), server).await;
     result.expect("server did not stop").unwrap().unwrap();
+}
+
+/// A session the server can't start (here, a display that doesn't exist) ends promptly, and
+/// the client learns why. Needs a desktop: `cargo test --release -- --ignored`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn server_errors_reach_the_client() {
+    let (server_end, client_end) = tokio::io::duplex(1 << 20);
+    let server = tokio::spawn(async move {
+        Server::new(ServerOptions::default()).run_stream(server_end).await
+    });
+
+    let (reader, writer) = tokio::io::split(client_end);
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let (_input_tx, input_rx) = mpsc::unbounded_channel();
+    let config = ServerConfig { display: Some(999), ..Default::default() };
+    tokio::spawn(session::run(reader, writer, config, input_rx, Arc::new(Mutex::new(None)), move |e| {
+        let _ = event_tx.send(e);
+    }));
+
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Event::Closed(result) = event_rx.recv().await.expect("session ended silently") {
+                return result;
+            }
+        }
+    })
+    .await
+    .expect("session did not end");
+    let err = closed.expect_err("session should have failed").to_string();
+    assert!(err.contains("display 999 does not exist"), "{err}");
+
+    let server_result = tokio::time::timeout(Duration::from_secs(10), server).await;
+    assert!(server_result.expect("server did not stop").unwrap().is_err());
 }

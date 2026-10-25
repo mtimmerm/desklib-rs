@@ -26,6 +26,7 @@
 
 mod client;
 mod codec;
+mod handshake;
 mod proto;
 mod server;
 mod transport;
@@ -33,16 +34,22 @@ mod transport;
 #[cfg(test)]
 mod tests;
 
-pub use client::{Client, ClientConfig};
-pub use server::{Server, ServerConfig};
+pub use client::{Client, ClientConfig, ServerInfoCallback};
+pub use handshake::{
+    ServerConfig, ServerDetails, VersionMismatch, MIN_CLIENT_PROTOCOL_VERSION, MIN_SERVER_PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
+};
+pub use server::{Server, ServerOptions};
 
-/// Copyright and license notice for desklib. The client shows it in its window, as the GNU
-/// AGPL (section 5(d)) requires of interactive user interfaces.
+/// Copyright and license notice for desklib.
+///
+/// The GNU AGPL (section 5(d)) requires interactive programs built on desklib to display it,
+/// for example in an About box, along with where to get the source ([`SOURCE_URL`]).
 pub const LEGAL_NOTICE: &str = "desklib \u{a9} 2026 Matt Timmermans, derived from RustDesk \u{a9} Purslane Tech Pte. Ltd. and the RustDesk contributors. Free software under the GNU AGPL v3, with ABSOLUTELY NO WARRANTY.";
 
 /// Where the source code of this version of desklib is published.
 ///
 /// If you distribute a modified version, or run one that users interact with over a network,
 /// the GNU AGPL requires you to offer its source code: change this, or set
-/// [`ServerConfig::source_url`], to where your modified source can be obtained.
+/// [`ServerOptions::source_url`], to where your modified source can be obtained.
 pub const SOURCE_URL: &str = env!("CARGO_PKG_REPOSITORY");

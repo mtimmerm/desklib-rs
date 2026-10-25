@@ -71,8 +71,6 @@ pub struct App {
     keys: HashSet<u32>,
     buttons: HashSet<proto::MouseButton>,
     scroll: (f64, f64),
-    /// The server's source URL, if it differs from this client's.
-    server_source: Option<String>,
     pub result: Option<Result<()>>,
 }
 
@@ -101,23 +99,8 @@ impl App {
             keys: HashSet::new(),
             buttons: HashSet::new(),
             scroll: (0.0, 0.0),
-            server_source: None,
             result: None,
         }
-    }
-
-    /// The configured title plus the copyright, license and source notices that the GNU AGPL
-    /// requires an interactive interface to show (sections 5(d) and 13).
-    fn title(&self) -> String {
-        let mut title = format!(
-            "{} \u{2014} desklib \u{a9} 2026 Matt Timmermans and RustDesk contributors \u{b7} GNU AGPL v3, NO WARRANTY \u{b7} source: {}",
-            self.config.title,
-            crate::SOURCE_URL
-        );
-        if let Some(url) = &self.server_source {
-            title.push_str(&format!(" \u{b7} server source: {url}"));
-        }
-        title
     }
 
     fn send(&self, msg: Message) {
@@ -346,7 +329,7 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title(self.title())
+            .with_title(self.config.title.clone())
             .with_inner_size(PhysicalSize::new(1280, 720));
         let created = event_loop.create_window(attrs).map_err(anyhow::Error::from).and_then(|window| {
             let window = Arc::new(window);
@@ -368,13 +351,10 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         match event.event {
-            Event::ServerInfo { source_url, notice } => {
-                log::info!("server: {notice} Source: {source_url}");
-                if source_url != crate::SOURCE_URL {
-                    self.server_source = Some(source_url);
-                    if let Some(w) = &self.window {
-                        w.set_title(&self.title());
-                    }
+            Event::ServerInfo(details) => {
+                log::info!("server: {} Source: {}", details.notice, details.source_url);
+                if let Some(callback) = &self.config.on_server_info {
+                    callback(&details);
                 }
             }
             Event::Frame => self.on_frame(),

@@ -18,7 +18,7 @@
 //! Plain TCP has no authentication or encryption; anyone who can reach the port controls
 //! the machine. Wrap the stream in TLS or tunnel it for anything beyond a trusted network.
 
-use desklib::{Server, ServerConfig};
+use desklib::{Server, ServerOptions};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
     let addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:21118".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     log::info!("listening on {addr}");
-    let server = Server::new(ServerConfig::default());
+    let server = Server::new(ServerOptions::default());
     loop {
         let (stream, peer) = listener.accept().await?;
         stream.set_nodelay(true)?;

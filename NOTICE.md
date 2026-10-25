@@ -111,7 +111,16 @@ decoder, and rdev (<https://github.com/rustdesk-org/rdev>, MIT) handles key inje
 If you convey desklib, or a work based on it, you must do so under the GNU AGPL, version 3,
 and provide its Corresponding Source. If you modify desklib and run it so that users interact
 with it over a network, section 13 requires you to offer those users its source code. The
-server does this for you by sending `ServerConfig::source_url` to every client, and the client
-shows it in its window. Set it to where the source of your modified version can be obtained.
-Keep the copyright, license and modification notices, including this file, and the notice the
-client displays.
+server sends its offer, `ServerOptions::source_url`, to every client; set it to where the
+source of your modified version can be obtained.
+
+desklib's client shows the remote desktop in a window whose title the application chooses.
+Applications built on it must let their users see, somewhere convenient such as an About box
+(sections 5(d) and 13):
+
+- desklib's copyright and license notice and source location: `desklib::LEGAL_NOTICE` and
+  `desklib::SOURCE_URL`;
+- the connected server's notice and source offer, which the client passes to the application
+  through `ClientConfig::on_server_info`.
+
+Keep the copyright, license and modification notices, including this file.

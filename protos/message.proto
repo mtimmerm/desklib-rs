@@ -14,16 +14,66 @@
 syntax = "proto3";
 package desk;
 
-// ---- server -> client ----
+// Compatibility rules. Peers built from different versions of this file must interoperate:
+// - Never change the number or type of an existing field, or reuse a removed field's number;
+//   list removed numbers under `reserved`.
+// - New fields and messages get new numbers. Older peers skip what they don't know, and see
+//   absent fields as their defaults.
+// - Settings are `optional`, so "not given" (use your default) differs from zero.
+// - Bump PROTOCOL_VERSION (src/handshake.rs) whenever a peer needs to know that the other
+//   side understands something new, and raise the minimum peer versions to drop support for
+//   old peers.
 
-// Sent by the server first, when a client connects. Carries the offer of source code that the
-// GNU AGPL (section 13) requires for software users interact with over a network.
+// ---- handshake ----
+//
+// 1. The server sends ServerInfo as soon as the client connects.
+// 2. The client sends ClientHello, choosing the session's settings.
+// Each side checks the other's protocol version against its own minimum, and against the
+// minimum the other side requires, and closes the connection if they don't match.
+
+// Sent by the server first. Also carries the offer of source code that the GNU AGPL
+// (section 13) requires for software users interact with over a network.
 message ServerInfo {
   // Where the Corresponding Source of the server software can be obtained.
   string source_url = 1;
   // Copyright and license notice of the server software.
   string notice = 2;
+  // The server's protocol version.
+  uint32 protocol_version = 3;
+  // The oldest client protocol version the server supports.
+  uint32 min_client_protocol_version = 4;
+  // Software name and version, e.g. "desklib 0.1.0", for logs and error messages.
+  string software_version = 5;
 }
+
+// The client's reply to ServerInfo.
+message ClientHello {
+  // The client's protocol version.
+  uint32 protocol_version = 1;
+  // The oldest server protocol version the client supports.
+  uint32 min_server_protocol_version = 2;
+  // Software name and version, e.g. "desklib 0.1.0", for logs and error messages.
+  string software_version = 3;
+  // Settings for this session.
+  ServerConfig config = 4;
+}
+
+// Session settings chosen by the client. Every field is optional: the server uses its own
+// default for anything not given, including fields added after the client was built.
+message ServerConfig {
+  // Index of the display to share, in the server platform's enumeration order.
+  optional uint32 display = 1;
+  // Upper bound on frames per second.
+  optional uint32 max_fps = 2;
+  // Encoder speed preset, 0 (slowest, best compression) to 10 (fastest).
+  optional uint32 speed = 3;
+  // Constant quantizer, 0 (best quality) to 255 (smallest).
+  optional uint32 quantizer = 4;
+  // Encoder threads; 0 means one per CPU.
+  optional uint32 encoder_threads = 5;
+}
+
+// ---- server -> client ----
 
 // One AV1 temporal unit (a sequence of OBUs) covering the whole captured display.
 message VideoFrame {
@@ -46,6 +96,12 @@ message CursorData {
 message CursorPosition {
   int32 x = 1;
   int32 y = 2;
+}
+
+// Sent by the server just before it ends a session because of an error, e.g. when the
+// display the client asked for doesn't exist.
+message SessionError {
+  string message = 1;
 }
 
 // ---- client -> server ----
@@ -99,5 +155,7 @@ message Message {
     KeyEvent key_event = 9;
     RefreshVideo refresh_video = 10;
     ServerInfo server_info = 11;
+    ClientHello client_hello = 12;
+    SessionError session_error = 13;
   }
 }

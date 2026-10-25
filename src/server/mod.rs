@@ -17,8 +17,8 @@ mod cursor;
 mod input;
 mod video;
 
-use crate::codec::EncoderSettings;
-use crate::proto::{Message, ServerInfo, Union};
+use crate::handshake::{self, Settings};
+use crate::proto::{Message, SessionError, Union};
 use crate::transport::{MessageReader, MessageWriter};
 use anyhow::{anyhow, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,19 +26,10 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
-/// Server settings.
+/// Settings chosen by whoever runs the server. Session settings such as the display and
+/// video quality are chosen by the client; see [`ServerConfig`](crate::ServerConfig).
 #[derive(Debug, Clone)]
-pub struct ServerConfig {
-    /// Index of the display to share, in the platform's enumeration order.
-    pub display: usize,
-    /// Upper bound on frames per second. Frames are only sent when the screen changes.
-    pub max_fps: u32,
-    /// rav1e speed preset, 0 (slowest) to 10 (fastest).
-    pub speed: u8,
-    /// Constant quantizer, 0 (best quality) to 255 (smallest).
-    pub quantizer: u8,
-    /// Encoder threads; 0 uses one per CPU.
-    pub encoder_threads: usize,
+pub struct ServerOptions {
     /// Where users can get the source code of this server, sent to every client that connects.
     ///
     /// The GNU AGPL (section 13) requires a modified version that users interact with over a
@@ -47,26 +38,10 @@ pub struct ServerConfig {
     pub source_url: String,
 }
 
-impl Default for ServerConfig {
+impl Default for ServerOptions {
     fn default() -> Self {
-        let enc = EncoderSettings::default();
         Self {
-            display: 0,
-            max_fps: 30,
-            speed: enc.speed,
-            quantizer: enc.quantizer,
-            encoder_threads: enc.threads,
             source_url: crate::SOURCE_URL.into(),
-        }
-    }
-}
-
-impl ServerConfig {
-    fn encoder_settings(&self) -> EncoderSettings {
-        EncoderSettings {
-            speed: self.speed,
-            quantizer: self.quantizer,
-            threads: self.encoder_threads,
         }
     }
 }
@@ -83,7 +58,7 @@ impl ServerConfig {
 /// # }
 /// ```
 pub struct Server {
-    config: ServerConfig,
+    options: ServerOptions,
 }
 
 /// Where the shared display sits on the desktop, for mapping frame pixels to input
@@ -119,6 +94,7 @@ pub(crate) struct Shared {
     key_frame_requested: AtomicBool,
     rect: Mutex<DisplayRect>,
     error: Mutex<Option<anyhow::Error>>,
+    failed: tokio::sync::Notify,
 }
 
 impl Shared {
@@ -141,6 +117,15 @@ impl Shared {
     /// Records why a worker thread gave up; the session then ends with this error.
     pub fn fail(&self, err: anyhow::Error) {
         self.error.lock().unwrap().get_or_insert(err);
+        self.failed.notify_one();
+    }
+
+    fn take_error(&self) -> anyhow::Error {
+        self.error
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or_else(|| anyhow!("capture stopped"))
     }
 }
 
@@ -154,12 +139,16 @@ impl Drop for StopOnDrop {
 }
 
 impl Server {
-    pub fn new(config: ServerConfig) -> Self {
-        Self { config }
+    pub fn new(options: ServerOptions) -> Self {
+        Self { options }
     }
 
     /// Serves one peer until it disconnects or an error occurs. Returns `Ok` when the peer
     /// closes the stream.
+    ///
+    /// The session starts with a handshake in which the client chooses the session's
+    /// settings. If either side's version is too old for the other, this returns a
+    /// [`VersionMismatch`](crate::VersionMismatch) error.
     pub async fn run<R, W>(&self, reader: R, writer: W) -> Result<()>
     where
         R: AsyncRead + Unpin,
@@ -167,60 +156,25 @@ impl Server {
     {
         #[cfg(windows)]
         set_dpi_aware();
-        log::info!("{} Source: {}", crate::LEGAL_NOTICE, self.config.source_url);
-
-        let shared = Arc::new(Shared {
-            stopped: AtomicBool::new(false),
-            key_frame_requested: AtomicBool::new(false),
-            rect: Mutex::new(DisplayRect { x: 0, y: 0, scale: 1.0 }),
-            error: Mutex::new(None),
-        });
-        let _stop = StopOnDrop(shared.clone());
-
-        // Small, so a slow peer throttles capture rather than queueing stale frames.
-        let (out_tx, mut out_rx) = mpsc::channel::<Message>(4);
-        video::spawn(self.config.clone(), shared.clone(), out_tx.clone())?;
-        cursor::spawn(shared.clone(), out_tx);
-        let input = input::spawn(shared.clone())?;
+        log::info!("{} Source: {}", crate::LEGAL_NOTICE, self.options.source_url);
 
         let mut reader = MessageReader::new(reader);
         let mut writer = MessageWriter::new(writer);
+        let config = handshake::server(&mut reader, &mut writer, &self.options.source_url).await?;
+        let settings = Settings::resolve(&config);
+        log::debug!("session settings: {settings:?}");
 
-        let mut info = Message::new();
-        info.set_server_info(ServerInfo {
-            source_url: self.config.source_url.clone(),
-            notice: crate::LEGAL_NOTICE.into(),
-            ..Default::default()
-        });
-        writer.send(&info).await?;
-
-        loop {
-            tokio::select! {
-                msg = reader.next() => {
-                    let Some(msg) = msg? else { return Ok(()) };
-                    match msg.union {
-                        Some(Union::RefreshVideo(_)) => {
-                            shared.key_frame_requested.store(true, Ordering::Relaxed);
-                        }
-                        Some(other) => {
-                            if let Some(event) = input::InputEvent::from_message(other) {
-                                // The input thread only stops once the session is over.
-                                let _ = input.send(event);
-                            }
-                        }
-                        None => {}
-                    }
-                }
-                msg = out_rx.recv() => {
-                    match msg {
-                        Some(msg) => writer.send(&msg).await?,
-                        // Every producer has exited, which they only do on error.
-                        None => {
-                            return Err(shared.error.lock().unwrap().take()
-                                .unwrap_or_else(|| anyhow!("capture stopped")));
-                        }
-                    }
-                }
+        match serve(settings, &mut reader, &mut writer).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Tell the client why, if the connection still works.
+                let mut msg = Message::new();
+                msg.set_session_error(SessionError {
+                    message: format!("{e:#}"),
+                    ..Default::default()
+                });
+                let _ = writer.send(&msg).await;
+                Err(e)
             }
         }
     }
@@ -232,6 +186,61 @@ impl Server {
     {
         let (reader, writer) = tokio::io::split(stream);
         self.run(reader, writer).await
+    }
+}
+
+/// Runs a session after the handshake. Returns `Ok` when the client closes the stream.
+async fn serve<R, W>(
+    settings: Settings,
+    reader: &mut MessageReader<R>,
+    writer: &mut MessageWriter<W>,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let shared = Arc::new(Shared {
+        stopped: AtomicBool::new(false),
+        key_frame_requested: AtomicBool::new(false),
+        rect: Mutex::new(DisplayRect { x: 0, y: 0, scale: 1.0 }),
+        error: Mutex::new(None),
+        failed: tokio::sync::Notify::new(),
+    });
+    let _stop = StopOnDrop(shared.clone());
+
+    // Small, so a slow peer throttles capture rather than queueing stale frames.
+    let (out_tx, mut out_rx) = mpsc::channel::<Message>(4);
+    video::spawn(settings, shared.clone(), out_tx.clone())?;
+    cursor::spawn(shared.clone(), out_tx);
+    let input = input::spawn(shared.clone())?;
+
+    loop {
+        tokio::select! {
+            msg = reader.next() => {
+                let Some(msg) = msg? else { return Ok(()) };
+                match msg.union {
+                    Some(Union::RefreshVideo(_)) => {
+                        shared.key_frame_requested.store(true, Ordering::Relaxed);
+                    }
+                    Some(other) => {
+                        if let Some(event) = input::InputEvent::from_message(other) {
+                            // The input thread only stops once the session is over.
+                            let _ = input.send(event);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            msg = out_rx.recv() => {
+                match msg {
+                    Some(msg) => writer.send(&msg).await?,
+                    // Every producer has exited, which they only do on error.
+                    None => return Err(shared.take_error()),
+                }
+            }
+            // A worker gave up, e.g. capture couldn't start.
+            () = shared.failed.notified() => return Err(shared.take_error()),
+        }
     }
 }
 
