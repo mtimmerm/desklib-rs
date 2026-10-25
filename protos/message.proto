@@ -1,0 +1,103 @@
+// desklib: remote desktop over any async stream.
+// Copyright (C) 2026 Matt Timmermans
+//
+// Derived from RustDesk (https://github.com/rustdesk/rustdesk),
+// Copyright (C) Purslane Tech Pte. Ltd. and the RustDesk contributors. See NOTICE.md.
+//
+// This program is free software: you can redistribute it and/or modify it under the terms of
+// the GNU Affero General Public License, version 3, as published by the Free Software
+// Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+// without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+// See the GNU Affero General Public License for more details. You should have received a copy
+// of it with this program (LICENSE); if not, see <https://www.gnu.org/licenses/>.
+
+syntax = "proto3";
+package desk;
+
+// ---- server -> client ----
+
+// Sent by the server first, when a client connects. Carries the offer of source code that the
+// GNU AGPL (section 13) requires for software users interact with over a network.
+message ServerInfo {
+  // Where the Corresponding Source of the server software can be obtained.
+  string source_url = 1;
+  // Copyright and license notice of the server software.
+  string notice = 2;
+}
+
+// One AV1 temporal unit (a sequence of OBUs) covering the whole captured display.
+message VideoFrame {
+  bytes data = 1;
+  bool key = 2;
+}
+
+// A cursor shape, which the client caches by `id`.
+message CursorData {
+  uint64 id = 1;
+  int32 hotx = 2;
+  int32 hoty = 3;
+  int32 width = 4;
+  int32 height = 5;
+  // RGBA, row-major, `width * height * 4` bytes.
+  bytes colors = 6;
+}
+
+// Pointer position in video frame pixels.
+message CursorPosition {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+// ---- client -> server ----
+
+enum MouseButton {
+  LEFT = 0;
+  RIGHT = 1;
+  MIDDLE = 2;
+  BACK = 3;
+  FORWARD = 4;
+}
+
+message MouseMove {
+  // In video frame pixels.
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message MouseButtonEvent {
+  MouseButton button = 1;
+  bool down = 2;
+}
+
+// Scroll amount in lines (notches); positive is right / up.
+message MouseWheel {
+  int32 dx = 1;
+  int32 dy = 2;
+}
+
+message KeyEvent {
+  // USB HID usage ID from the keyboard/keypad page (0x07), identifying the physical key.
+  uint32 usb_hid = 1;
+  bool down = 2;
+}
+
+// Asks the server to send a key frame, e.g. after the client failed to decode one.
+message RefreshVideo {}
+
+message Message {
+  oneof union {
+    VideoFrame video_frame = 1;
+    CursorData cursor_data = 2;
+    // Switch to a shape previously sent as `cursor_data`.
+    uint64 cursor_id = 3;
+    CursorPosition cursor_position = 4;
+    // The cursor is hidden on the server.
+    bool cursor_hidden = 5;
+    MouseMove mouse_move = 6;
+    MouseButtonEvent mouse_button = 7;
+    MouseWheel mouse_wheel = 8;
+    KeyEvent key_event = 9;
+    RefreshVideo refresh_video = 10;
+    ServerInfo server_info = 11;
+  }
+}

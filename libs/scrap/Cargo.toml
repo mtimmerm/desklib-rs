@@ -1,0 +1,43 @@
+[package]
+name = "scrap"
+description = "Screen capture made easy."
+version = "0.5.0"
+repository = "https://github.com/quadrupleslap/scrap"
+documentation = "https://docs.rs/scrap"
+keywords = ["screen", "capture", "record"]
+# Originally MIT (scrap by Ram); RustDesk's and desklib's changes are AGPL-3.0.
+# See LICENSE-MIT here and NOTICE.md at the repository root.
+license = "MIT AND AGPL-3.0-only"
+authors = ["Ram <quadrupleslap@gmail.com>", "RustDesk contributors <info@rustdesk.com>", "Matt Timmermans <matt@timmermans.org>"]
+edition = "2018"
+publish = false
+
+[features]
+wayland = ["gstreamer", "gstreamer-app", "gstreamer-video", "dbus", "tracing", "zbus", "dep:regex", "dep:tokio", "dep:serde_json"]
+
+[dependencies]
+cfg-if = "1.0"
+num_cpus = "1.15"
+lazy_static = "1.4"
+log = "0.4"
+libc = "0.2"
+anyhow = "1.0"
+base = { path = "../base" }
+serde = { version = "1.0", features = ["derive"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["dxgi", "dxgi1_2", "dxgi1_5", "dxgi1_6", "d3d11", "winuser", "winerror", "errhandlingapi", "libloaderapi"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = { version = "0.9", optional = true }
+tracing = { version = "0.1", optional = true }
+gstreamer = { version = "0.16", optional = true }
+gstreamer-app = { version = "0.16", features = ["v1_10"], optional = true }
+gstreamer-video = { version = "0.16", optional = true }
+zbus = { version = "3.15", optional = true }
+regex = { version = "1.11", optional = true }
+tokio = { version = "1.44", features = ["full"], optional = true }
+serde_json = { version = "1.0", optional = true }

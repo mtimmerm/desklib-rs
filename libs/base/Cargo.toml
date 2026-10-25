@@ -1,0 +1,24 @@
+[package]
+name = "base"
+version = "0.1.0"
+authors = ["RustDesk contributors <info@rustdesk.com>", "Matt Timmermans <matt@timmermans.org>"]
+edition = "2018"
+license = "AGPL-3.0-only"
+publish = false
+
+# From RustDesk's libs/base (https://github.com/rustdesk/rustdesk), modified for desklib.
+# See NOTICE.md at the repository root.
+
+# Platform probes (display server detection, Wayland output enumeration) that both the
+# capture (`scrap`) and input (`enigo`) crates need.
+
+[target.'cfg(target_os = "linux")'.dependencies]
+anyhow = "1.0"
+log = "0.4"
+lazy_static = "1.5"
+serde_derive = "1.0"
+serde = "1.0"
+sctk = { package = "smithay-client-toolkit", version = "0.20.0", default-features = false, features = [
+    "calloop",
+] }
+users = { version = "0.11" }

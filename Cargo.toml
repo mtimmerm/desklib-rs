@@ -1,0 +1,78 @@
+[package]
+name = "desklib"
+version = "0.1.0"
+authors = ["Matt Timmermans <matt@timmermans.org>"]
+edition = "2021"
+description = "Remote desktop server and client over any AsyncRead + AsyncWrite stream (derived from RustDesk)"
+license = "AGPL-3.0-only"
+repository = "https://github.com/mtimmerm/desklib-rs"
+readme = "README.md"
+keywords = ["remote-desktop", "screen-sharing", "av1", "vnc"]
+categories = ["multimedia::video", "network-programming"]
+rust-version = "1.83"
+
+[features]
+default = ["asm"]
+# Wayland capture through the xdg-desktop-portal / PipeWire (links the system GStreamer).
+wayland = ["scrap/wayland"]
+# Hand-written assembly in the AV1 encoder and decoder: several times faster. Building needs
+# nasm (x86/x86_64) or a C compiler (ARM); `--no-default-features` builds pure Rust.
+# rav1d's assembly build references its 16-bit routines even with only 8-bit enabled.
+asm = ["rav1e/asm", "rav1d/asm", "rav1d/bitdepth_16"]
+
+[dependencies]
+scrap = { path = "libs/scrap" }
+enigo = { path = "libs/enigo" }
+rdev = { git = "https://github.com/rustdesk-org/rdev" }
+# Assembly is behind this crate's `asm` feature.
+rav1e = { version = "0.8", default-features = false, features = ["threading"] }
+rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8"] }
+tokio = { version = "1.44", features = ["rt", "rt-multi-thread", "sync", "io-util", "macros"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+bytes = "1.10"
+protobuf = { version = "3.7", features = ["with-bytes"] }
+log = "0.4"
+anyhow = "1.0"
+winit = "0.30"
+softbuffer = "0.4"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["winuser", "wingdi", "windef", "shellscalingapi", "errhandlingapi"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+cocoa = "0.24"
+core-graphics = "0.22"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11 = { version = "2.21", features = ["xlib", "xfixes"] }
+
+[build-dependencies]
+protobuf-codegen = "3.7"
+
+[dev-dependencies]
+tokio = { version = "1.44", features = ["full"] }
+env_logger = "0.11"
+
+[workspace]
+members = ["libs/scrap", "libs/base", "libs/enigo", "libs/libxdo-sys-stub"]
+exclude = ["libs/rav1e"]
+
+# enigo's libxdo-sys dependency is satisfied by a stub that dlopens libxdo at runtime,
+# so neither libxdo nor its headers are needed to build.
+[patch.crates-io]
+libxdo-sys = { path = "libs/libxdo-sys-stub" }
+# rav1e 0.8.1 plus `Context::set_zero_latency`, so each frame is output as soon as it is
+# encoded instead of after four more frames of lookahead.
+rav1e = { path = "libs/rav1e" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# The codecs are unusably slow unoptimized.
+[profile.dev.package.rav1e]
+opt-level = 3
+[profile.dev.package.rav1d]
+opt-level = 3

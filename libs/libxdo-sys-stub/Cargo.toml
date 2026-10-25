@@ -1,0 +1,17 @@
+[package]
+name = "libxdo-sys"
+version = "0.11.0"
+edition = "2021"
+authors = ["RustDesk contributors <info@rustdesk.com>", "Matt Timmermans <matt@timmermans.org>"]
+license = "AGPL-3.0-only"
+publish = false
+
+# From RustDesk's libs/libxdo-sys-stub (https://github.com/rustdesk/rustdesk), modified for
+# desklib. See NOTICE.md at the repository root.
+description = "Dynamic loading wrapper for libxdo-sys that doesn't require libxdo at compile/link time"
+
+[dependencies]
+libc = "0.2"
+libloading = "0.8"
+log = "0.4"
+x11 = "2.21"
